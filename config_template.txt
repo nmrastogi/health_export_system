@@ -1,0 +1,19 @@
+# Health Data Export System Configuration
+# Copy this file to .env and fill in your actual credentials
+
+# Amazon RDS Database Configuration
+RDS_HOST=your-rds-endpoint.amazonaws.com
+RDS_USER=your-database-username
+RDS_PASSWORD=your-database-password
+RDS_DATABASE=health_data
+RDS_PORT=3306
+
+# iPhone Health App API Configuration
+# You'll need to set up Health app data export via Shortcuts or third-party app
+HEALTH_SLEEP_ENDPOINT=https://your-health-api.com/api/sleep
+HEALTH_EXERCISE_ENDPOINT=https://your-health-api.com/api/exercise
+HEALTH_API_KEY=your-health-api-key
+
+# Optional: Notification settings
+NOTIFICATION_WEBHOOK_URL=https://hooks.slack.com/your-webhook-url
+NOTIFICATION_EMAIL=your-email@example.com
