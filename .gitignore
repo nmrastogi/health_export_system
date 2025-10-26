@@ -6,3 +6,4 @@ __pycache__/
 config_template.txt
 SETUP_INSTRUCTIONS.md
 HOW_TO_EXPORT.md
+monitor.sh
