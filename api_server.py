@@ -16,6 +16,7 @@ import logging
 # CSV file paths
 SLEEP_CSV = 'sleep_data.csv'
 EXERCISE_CSV = 'exercise_data.csv'
+GLUCOSE_CSV = 'blood_glucose.csv'
 
 load_dotenv()
 
@@ -54,6 +55,15 @@ def initialize_csv_files():
                 'active_energy_kcal', 'resting_energy_kcal'
             ])
         logger.info(f"✅ Created {EXERCISE_CSV}")
+    
+    # Blood glucose data CSV
+    if not os.path.exists(GLUCOSE_CSV):
+        with open(GLUCOSE_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'timestamp', 'value', 'unit', 'source'
+            ])
+        logger.info(f"✅ Created {GLUCOSE_CSV}")
 
 # Initialize CSV files on startup
 initialize_csv_files()
@@ -178,15 +188,73 @@ def save_exercise_to_csv(exercise_records):
 def receive_exercise_data():
     """Receive exercise data from iPhone"""
     try:
-        data = request.get_json()
-        logger.info(f"📥 Received exercise data: {len(data) if isinstance(data, list) else 1} records")
+        # Log raw request data for debugging
+        raw_data = request.get_data(as_text=True)
+        logger.info(f"📥 Raw exercise request data: {raw_data[:200]}...")  # First 200 chars
         
-        # Process the data
-        if isinstance(data, dict):
-            data = [data]
+        request_data = request.get_json()
+        logger.info(f"📥 Parsed exercise JSON structure: {type(request_data)}")
+        
+        # Extract exercise data from Auto Export app format
+        # Format: {'data': {'metrics': [{'data': [...]}]}}
+        exercise_records = []
+        
+        if request_data and 'data' in request_data:
+            # Check for workout data (with metadata)
+            if 'workouts' in request_data['data']:
+                logger.info("🎯 Found workouts data with metadata!")
+                for workout in request_data['data']['workouts']:
+                    # Parse workout metadata
+                    # Get start time
+                    start_time = workout.get('start', '')
+                    
+                    # Extract calories from activeEnergyBurned if present
+                    calories = ''
+                    if 'activeEnergyBurned' in workout and workout['activeEnergyBurned']:
+                        calories = workout['activeEnergyBurned'].get('qty', '')
+                    
+                    # Get workout type
+                    activity_type = workout.get('workoutName', workout.get('workoutActivityType', 'Exercise'))
+                    
+                    parsed_record = {
+                        'timestamp': start_time,
+                        'activity_type': activity_type,
+                        'duration_minutes': '',
+                        'calories_burned': calories,
+                        'distance_km': '',
+                        'steps': '',
+                        'heart_rate_avg': '',
+                        'heart_rate_max': '',
+                        'active_energy_kcal': calories,  # Active energy from workout
+                        'resting_energy_kcal': ''
+                    }
+                    exercise_records.append(parsed_record)
+                    logger.info(f"📊 Workout: {activity_type}, Calories: {calories}, Start: {start_time}")
+            # Check for metric data (apple_exercise_time format)
+            elif 'metrics' in request_data['data']:
+                for metric in request_data['data']['metrics']:
+                    if 'data' in metric:
+                        # Extract individual exercise records
+                        for record in metric['data']:
+                            # Parse the exercise record
+                            parsed_record = {
+                                'timestamp': record.get('date', ''),
+                                'activity_type': 'Exercise',  # Generic since we have exercise time
+                                'duration_minutes': record.get('qty', ''),  # Minutes of exercise
+                                'calories_burned': '',
+                                'distance_km': '',
+                                'steps': '',
+                                'heart_rate_avg': '',
+                                'heart_rate_max': '',
+                                'active_energy_kcal': '',
+                                'resting_energy_kcal': ''
+                            }
+                            exercise_records.append(parsed_record)
+        
+        logger.info(f"📥 Extracted {len(exercise_records)} exercise record(s) from data")
         
         # Save to CSV
-        count = save_exercise_to_csv(data)
+        count = save_exercise_to_csv(exercise_records)
         logger.info(f"✅ Saved {count} exercise records to {EXERCISE_CSV}")
         
         return jsonify({
@@ -203,6 +271,72 @@ def receive_exercise_data():
             'message': str(e)
         }), 500
 
+def save_glucose_to_csv(glucose_records):
+    """Save blood glucose data to CSV file"""
+    if not glucose_records:
+        return 0
+    
+    count = 0
+    with open(GLUCOSE_CSV, 'a', newline='') as f:
+        writer = csv.writer(f)
+        for record in glucose_records:
+            row = [
+                record.get('timestamp', ''),
+                record.get('value', ''),
+                record.get('unit', ''),
+                record.get('source', '')
+            ]
+            writer.writerow(row)
+            count += 1
+    
+    return count
+
+@app.route('/api/glucose', methods=['POST'])
+def receive_glucose_data():
+    """Receive blood glucose data from iPhone"""
+    try:
+        raw_data = request.get_data(as_text=True)
+        logger.info(f"📥 Raw glucose request data: {raw_data[:200]}...")
+        
+        request_data = request.get_json()
+        logger.info(f"📥 Parsed glucose JSON structure: {type(request_data)}")
+        
+        glucose_records = []
+        
+        # Extract blood glucose data from Auto Export app format
+        if request_data and 'data' in request_data:
+            if 'metrics' in request_data['data']:
+                for metric in request_data['data']['metrics']:
+                    if 'data' in metric:
+                        for record in metric['data']:
+                            parsed_record = {
+                                'timestamp': record.get('date', ''),
+                                'value': record.get('qty', ''),
+                                'unit': 'mg/dL',
+                                'source': record.get('source', '')
+                            }
+                            glucose_records.append(parsed_record)
+        
+        logger.info(f"📥 Extracted {len(glucose_records)} glucose record(s) from data")
+        
+        # Save to CSV
+        count = save_glucose_to_csv(glucose_records)
+        logger.info(f"✅ Saved {count} glucose records to {GLUCOSE_CSV}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Processed {count} glucose records',
+            'file': GLUCOSE_CSV,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing glucose data: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 @app.route('/api/test', methods=['GET'])
 def test_endpoint():
     """Test endpoint to verify connectivity"""
@@ -212,6 +346,7 @@ def test_endpoint():
         'endpoints': {
             'sleep': '/api/sleep',
             'exercise': '/api/exercise',
+            'glucose': '/api/glucose',
             'test': '/api/test'
         }
     })
@@ -225,6 +360,7 @@ if __name__ == '__main__':
     logger.info(f"📡 Endpoints available:")
     logger.info(f"   - POST http://{host}:{port}/api/sleep")
     logger.info(f"   - POST http://{host}:{port}/api/exercise")
+    logger.info(f"   - POST http://{host}:{port}/api/glucose")
     logger.info(f"   - GET http://{host}:{port}/api/test")
     
     app.run(host=host, port=port, debug=False)
