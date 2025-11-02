@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Health Data API Server
-Receives health data from iPhone Shortcuts/mobile apps and stores in CSV files
+Receives health data from iPhone Shortcuts/mobile apps and stores in Amazon RDS
 """
 
 from flask import Flask, request, jsonify
@@ -12,6 +12,7 @@ import csv
 from datetime import datetime
 from dotenv import load_dotenv
 import logging
+import pymysql
 
 # CSV file paths
 SLEEP_CSV = 'sleep_data.csv'
@@ -29,6 +30,110 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for mobile app requests
+
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('RDS_HOST', 'localhost'),
+    'user': os.getenv('RDS_USER', 'root'),
+    'password': os.getenv('RDS_PASSWORD', ''),
+    'database': os.getenv('RDS_DATABASE', 'health_data'),
+    'port': int(os.getenv('RDS_PORT', 3306)),
+    'charset': 'utf8mb4'
+}
+
+# Global database connection
+db_connection = None
+
+def get_db_connection():
+    """Get or create database connection"""
+    global db_connection
+    try:
+        if db_connection is None:
+            db_connection = pymysql.connect(**DB_CONFIG)
+            logger.info("✅ Connected to RDS database")
+        else:
+            # Test if connection is still alive
+            db_connection.ping(reconnect=True)
+    except Exception as e:
+        logger.error(f"❌ Database connection failed: {e}")
+        try:
+            db_connection = pymysql.connect(**DB_CONFIG)
+            logger.info("✅ Reconnected to RDS database")
+        except:
+            return None
+    return db_connection
+
+def create_tables():
+    """Create tables if they don't exist"""
+    conn = get_db_connection()
+    if not conn:
+        logger.warning("⚠️ Could not connect to database, skipping table creation")
+        return
+    
+    cursor = conn.cursor()
+    
+    # Sleep data table
+    sleep_table = """
+    CREATE TABLE IF NOT EXISTS sleep_data (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE NOT NULL,
+        bedtime DATETIME,
+        wake_time DATETIME,
+        sleep_duration_minutes INT,
+        deep_sleep_minutes INT,
+        light_sleep_minutes INT,
+        rem_sleep_minutes INT,
+        sleep_efficiency DECIMAL(5,2),
+        heart_rate_avg INT,
+        heart_rate_min INT,
+        heart_rate_max INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_date (date)
+    )
+    """
+    
+    # Exercise data table
+    exercise_table = """
+    CREATE TABLE IF NOT EXISTS exercise_data (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        timestamp DATETIME NOT NULL,
+        activity_type VARCHAR(100),
+        duration_minutes INT,
+        calories_burned DECIMAL(8,2),
+        distance_km DECIMAL(8,3),
+        steps INT,
+        heart_rate_avg INT,
+        heart_rate_max INT,
+        active_energy_kcal DECIMAL(8,2),
+        resting_energy_kcal DECIMAL(8,2),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_timestamp (timestamp)
+    )
+    """
+    
+    # Blood glucose table
+    glucose_table = """
+    CREATE TABLE IF NOT EXISTS blood_glucose (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        timestamp DATETIME NOT NULL,
+        value DECIMAL(6,2),
+        unit VARCHAR(10),
+        source VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_timestamp (timestamp)
+    )
+    """
+    
+    try:
+        cursor.execute(sleep_table)
+        cursor.execute(exercise_table)
+        cursor.execute(glucose_table)
+        conn.commit()
+        logger.info("✅ RDS tables created/verified")
+    except Exception as e:
+        logger.error(f"❌ Error creating tables: {e}")
+        conn.rollback()
 
 # Initialize CSV files with headers if they don't exist
 def initialize_csv_files():
@@ -65,40 +170,75 @@ def initialize_csv_files():
             ])
         logger.info(f"✅ Created {GLUCOSE_CSV}")
 
-# Initialize CSV files on startup
-initialize_csv_files()
+# Initialize CSV files on startup (optional backup)
+# initialize_csv_files()
+
+# Initialize RDS tables on startup
+create_tables()
 
 @app.route('/', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'ok', 'message': 'Health Export API is running'})
 
-def save_sleep_to_csv(sleep_records):
-    """Save sleep data to CSV file"""
+def save_sleep_to_rds(sleep_records):
+    """Save sleep data to RDS"""
     if not sleep_records:
         return 0
     
-    count = 0
-    with open(SLEEP_CSV, 'a', newline='') as f:
-        writer = csv.writer(f)
-        for record in sleep_records:
-            row = [
-                record.get('date', ''),
-                record.get('bedtime', ''),
-                record.get('wake_time', ''),
-                record.get('sleep_duration_minutes', ''),
-                record.get('deep_sleep_minutes', ''),
-                record.get('light_sleep_minutes', ''),
-                record.get('rem_sleep_minutes', ''),
-                record.get('sleep_efficiency', ''),
-                record.get('heart_rate_avg', ''),
-                record.get('heart_rate_min', ''),
-                record.get('heart_rate_max', ''),
-                datetime.now().isoformat()
-            ]
-            writer.writerow(row)
-            count += 1
+    conn = get_db_connection()
+    if not conn:
+        logger.error("⚠️ Database not available, skipping save")
+        return 0
     
+    cursor = conn.cursor()
+    count = 0
+    
+    for record in sleep_records:
+        try:
+            sleep_data = {
+                'date': record.get('date', ''),
+                'bedtime': record.get('bedtime') or None,
+                'wake_time': record.get('wake_time') or None,
+                'sleep_duration_minutes': int(record.get('sleep_duration_minutes', 0)) if record.get('sleep_duration_minutes') else None,
+                'deep_sleep_minutes': int(record.get('deep_sleep_minutes', 0)) if record.get('deep_sleep_minutes') else None,
+                'light_sleep_minutes': int(record.get('light_sleep_minutes', 0)) if record.get('light_sleep_minutes') else None,
+                'rem_sleep_minutes': int(record.get('rem_sleep_minutes', 0)) if record.get('rem_sleep_minutes') else None,
+                'sleep_efficiency': float(record.get('sleep_efficiency', 0)) if record.get('sleep_efficiency') else None,
+                'heart_rate_avg': int(record.get('heart_rate_avg', 0)) if record.get('heart_rate_avg') else None,
+                'heart_rate_min': int(record.get('heart_rate_min', 0)) if record.get('heart_rate_min') else None,
+                'heart_rate_max': int(record.get('heart_rate_max', 0)) if record.get('heart_rate_max') else None
+            }
+            
+            insert_query = """
+            INSERT INTO sleep_data 
+            (date, bedtime, wake_time, sleep_duration_minutes, deep_sleep_minutes, 
+             light_sleep_minutes, rem_sleep_minutes, sleep_efficiency, 
+             heart_rate_avg, heart_rate_min, heart_rate_max)
+            VALUES (%(date)s, %(bedtime)s, %(wake_time)s, %(sleep_duration_minutes)s, 
+                    %(deep_sleep_minutes)s, %(light_sleep_minutes)s, %(rem_sleep_minutes)s, 
+                    %(sleep_efficiency)s, %(heart_rate_avg)s, %(heart_rate_min)s, %(heart_rate_max)s)
+            ON DUPLICATE KEY UPDATE
+            bedtime = VALUES(bedtime),
+            wake_time = VALUES(wake_time),
+            sleep_duration_minutes = VALUES(sleep_duration_minutes),
+            deep_sleep_minutes = VALUES(deep_sleep_minutes),
+            light_sleep_minutes = VALUES(light_sleep_minutes),
+            rem_sleep_minutes = VALUES(rem_sleep_minutes),
+            sleep_efficiency = VALUES(sleep_efficiency),
+            heart_rate_avg = VALUES(heart_rate_avg),
+            heart_rate_min = VALUES(heart_rate_min),
+            heart_rate_max = VALUES(heart_rate_max),
+            updated_at = CURRENT_TIMESTAMP
+            """
+            
+            cursor.execute(insert_query, sleep_data)
+            count += 1
+        except Exception as e:
+            logger.error(f"❌ Error saving sleep record: {e}")
+            continue
+    
+    conn.commit()
     return count
 
 @app.route('/api/sleep', methods=['POST'])
@@ -140,14 +280,14 @@ def receive_sleep_data():
         
         logger.info(f"📥 Extracted {len(sleep_records)} sleep record(s) from data")
         
-        # Save to CSV
-        count = save_sleep_to_csv(sleep_records)
-        logger.info(f"✅ Saved {count} sleep records to {SLEEP_CSV}")
+        # Save to RDS
+        count = save_sleep_to_rds(sleep_records)
+        logger.info(f"✅ Saved {count} sleep records to RDS")
         
         return jsonify({
             'status': 'success',
             'message': f'Processed {count} sleep records',
-            'file': SLEEP_CSV,
+            'database': 'RDS',
             'timestamp': datetime.now().isoformat()
         }), 200
         
@@ -158,30 +298,60 @@ def receive_sleep_data():
             'message': str(e)
         }), 500
 
-def save_exercise_to_csv(exercise_records):
-    """Save exercise data to CSV file"""
+def save_exercise_to_rds(exercise_records):
+    """Save exercise data to RDS"""
     if not exercise_records:
         return 0
     
-    count = 0
-    with open(EXERCISE_CSV, 'a', newline='') as f:
-        writer = csv.writer(f)
-        for record in exercise_records:
-            row = [
-                record.get('timestamp', ''),
-                record.get('activity_type', ''),
-                record.get('duration_minutes', ''),
-                record.get('calories_burned', ''),
-                record.get('distance_km', ''),
-                record.get('steps', ''),
-                record.get('heart_rate_avg', ''),
-                record.get('heart_rate_max', ''),
-                record.get('active_energy_kcal', ''),
-                record.get('resting_energy_kcal', '')
-            ]
-            writer.writerow(row)
-            count += 1
+    conn = get_db_connection()
+    if not conn:
+        logger.error("⚠️ Database not available, skipping save")
+        return 0
     
+    cursor = conn.cursor()
+    count = 0
+    
+    for record in exercise_records:
+        try:
+            exercise_data = {
+                'timestamp': record.get('timestamp', ''),
+                'activity_type': record.get('activity_type'),
+                'duration_minutes': int(record.get('duration_minutes', 0)) if record.get('duration_minutes') else None,
+                'calories_burned': float(record.get('calories_burned', 0)) if record.get('calories_burned') else None,
+                'distance_km': float(record.get('distance_km', 0)) if record.get('distance_km') else None,
+                'steps': int(record.get('steps', 0)) if record.get('steps') else None,
+                'heart_rate_avg': int(record.get('heart_rate_avg', 0)) if record.get('heart_rate_avg') else None,
+                'heart_rate_max': int(record.get('heart_rate_max', 0)) if record.get('heart_rate_max') else None,
+                'active_energy_kcal': float(record.get('active_energy_kcal', 0)) if record.get('active_energy_kcal') else None,
+                'resting_energy_kcal': float(record.get('resting_energy_kcal', 0)) if record.get('resting_energy_kcal') else None
+            }
+            
+            insert_query = """
+            INSERT INTO exercise_data 
+            (timestamp, activity_type, duration_minutes, calories_burned, distance_km, 
+             steps, heart_rate_avg, heart_rate_max, active_energy_kcal, resting_energy_kcal)
+            VALUES (%(timestamp)s, %(activity_type)s, %(duration_minutes)s, %(calories_burned)s, 
+                    %(distance_km)s, %(steps)s, %(heart_rate_avg)s, %(heart_rate_max)s, 
+                    %(active_energy_kcal)s, %(resting_energy_kcal)s)
+            ON DUPLICATE KEY UPDATE
+            activity_type = VALUES(activity_type),
+            duration_minutes = VALUES(duration_minutes),
+            calories_burned = VALUES(calories_burned),
+            distance_km = VALUES(distance_km),
+            steps = VALUES(steps),
+            heart_rate_avg = VALUES(heart_rate_avg),
+            heart_rate_max = VALUES(heart_rate_max),
+            active_energy_kcal = VALUES(active_energy_kcal),
+            resting_energy_kcal = VALUES(resting_energy_kcal)
+            """
+            
+            cursor.execute(insert_query, exercise_data)
+            count += 1
+        except Exception as e:
+            logger.error(f"❌ Error saving exercise record: {e}")
+            continue
+    
+    conn.commit()
     return count
 
 @app.route('/api/exercise', methods=['POST'])
@@ -253,14 +423,14 @@ def receive_exercise_data():
         
         logger.info(f"📥 Extracted {len(exercise_records)} exercise record(s) from data")
         
-        # Save to CSV
-        count = save_exercise_to_csv(exercise_records)
-        logger.info(f"✅ Saved {count} exercise records to {EXERCISE_CSV}")
+        # Save to RDS
+        count = save_exercise_to_rds(exercise_records)
+        logger.info(f"✅ Saved {count} exercise records to RDS")
         
         return jsonify({
             'status': 'success',
             'message': f'Processed {count} exercise records',
-            'file': EXERCISE_CSV,
+            'database': 'RDS',
             'timestamp': datetime.now().isoformat()
         }), 200
         
@@ -271,24 +441,49 @@ def receive_exercise_data():
             'message': str(e)
         }), 500
 
-def save_glucose_to_csv(glucose_records):
-    """Save blood glucose data to CSV file"""
+def save_glucose_to_rds(glucose_records):
+    """Save blood glucose data to RDS"""
     if not glucose_records:
         return 0
     
-    count = 0
-    with open(GLUCOSE_CSV, 'a', newline='') as f:
-        writer = csv.writer(f)
-        for record in glucose_records:
-            row = [
-                record.get('timestamp', ''),
-                record.get('value', ''),
-                record.get('unit', ''),
-                record.get('source', '')
-            ]
-            writer.writerow(row)
-            count += 1
+    conn = get_db_connection()
+    if not conn:
+        logger.error("⚠️ Database not available, skipping save")
+        return 0
     
+    cursor = conn.cursor()
+    count = 0
+    
+    for record in glucose_records:
+        try:
+            glucose_data = {
+                'timestamp': record.get('timestamp', ''),
+                'value': float(record.get('value', 0)) if record.get('value') else None,
+                'unit': record.get('unit', 'mg/dL'),
+                'source': record.get('source')
+            }
+            
+            insert_query = """
+            INSERT INTO blood_glucose 
+            (timestamp, value, unit, source)
+            VALUES (%(timestamp)s, %(value)s, %(unit)s, %(source)s)
+            ON DUPLICATE KEY UPDATE
+            value = VALUES(value),
+            unit = VALUES(unit),
+            source = VALUES(source)
+            """
+            
+            cursor.execute(insert_query, glucose_data)
+            count += 1
+            
+            # Log progress every 1000 records
+            if count % 1000 == 0:
+                logger.info(f"📊 Processed {count} glucose records...")
+        except Exception as e:
+            logger.error(f"❌ Error saving glucose record: {e}")
+            continue
+    
+    conn.commit()
     return count
 
 @app.route('/api/glucose', methods=['POST'])
@@ -319,14 +514,14 @@ def receive_glucose_data():
         
         logger.info(f"📥 Extracted {len(glucose_records)} glucose record(s) from data")
         
-        # Save to CSV
-        count = save_glucose_to_csv(glucose_records)
-        logger.info(f"✅ Saved {count} glucose records to {GLUCOSE_CSV}")
+        # Save to RDS
+        count = save_glucose_to_rds(glucose_records)
+        logger.info(f"✅ Saved {count} glucose records to RDS")
         
         return jsonify({
             'status': 'success',
             'message': f'Processed {count} glucose records',
-            'file': GLUCOSE_CSV,
+            'database': 'RDS',
             'timestamp': datetime.now().isoformat()
         }), 200
         
