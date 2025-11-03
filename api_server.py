@@ -456,11 +456,29 @@ def save_glucose_to_rds(glucose_records):
     
     for record in glucose_records:
         try:
+            # Validate and clean data
+            timestamp = record.get('timestamp', '') or record.get('date', '')
+            value = record.get('value', '') or record.get('qty', '')
+            
+            # Skip records with missing required fields
+            if not timestamp or not value:
+                logger.warning(f"⚠️ Skipping record with missing timestamp or value: {record}")
+                continue
+            
+            # Try to convert value to float
+            try:
+                value_float = float(value)
+                if value_float <= 0:  # Invalid glucose reading
+                    continue
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ Skipping record with invalid value: {value}")
+                continue
+            
             glucose_data = {
-                'timestamp': record.get('timestamp', ''),
-                'value': float(record.get('value', 0)) if record.get('value') else None,
-                'unit': record.get('unit', 'mg/dL'),
-                'source': record.get('source')
+                'timestamp': timestamp,
+                'value': value_float,
+                'unit': record.get('unit', 'mg/dL') or 'mg/dL',
+                'source': record.get('source') or None
             }
             
             insert_query = """
@@ -481,9 +499,15 @@ def save_glucose_to_rds(glucose_records):
                 logger.info(f"📊 Processed {count} glucose records...")
         except Exception as e:
             logger.error(f"❌ Error saving glucose record: {e}")
+            logger.error(f"   Record data: {record}")
             continue
     
-    conn.commit()
+    try:
+        conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Error committing glucose data: {e}")
+        conn.rollback()
+    
     return count
 
 @app.route('/api/glucose', methods=['POST'])
@@ -516,17 +540,25 @@ def receive_glucose_data():
         
         # Save to RDS
         count = save_glucose_to_rds(glucose_records)
-        logger.info(f"✅ Saved {count} glucose records to RDS")
         
-        return jsonify({
-            'status': 'success',
-            'message': f'Processed {count} glucose records',
-            'database': 'RDS',
-            'timestamp': datetime.now().isoformat()
-        }), 200
+        if count > 0:
+            logger.info(f"✅ Saved {count} glucose records to RDS")
+            return jsonify({
+                'status': 'success',
+                'message': f'Processed {count} glucose records',
+                'database': 'RDS',
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            logger.warning(f"⚠️ No glucose records were saved (all may have been invalid)")
+            return jsonify({
+                'status': 'warning',
+                'message': 'No valid glucose records to save',
+                'total_extracted': len(glucose_records)
+            }), 200  # Return 200 even if no records saved
         
     except Exception as e:
-        logger.error(f"❌ Error processing glucose data: {e}")
+        logger.error(f"❌ Error processing glucose data: {e}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': str(e)
