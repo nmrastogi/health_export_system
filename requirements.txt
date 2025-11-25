@@ -18,6 +18,15 @@ alembic==1.12.1
 pydantic==2.5.0
 httpx==0.25.2
 
+# gRPC dependencies
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
+protobuf>=5.0.0
+
+# FastAPI and gateway dependencies
+fastapi==0.104.1
+uvicorn==0.24.0
+
 # Development dependencies
 pytest==7.4.3
 black==23.11.0

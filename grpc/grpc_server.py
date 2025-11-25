@@ -15,7 +15,16 @@ from google.protobuf.empty_pb2 import Empty
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Configure logging to both file and console
+log_file = os.path.join(os.path.dirname(__file__), 'grpc_server.log')
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 DB_CONFIG = {
@@ -110,8 +119,10 @@ def create_tables():
 class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
 
     def ExportSleep(self, request, context):
+        logger.info(f"📥 Received sleep data: {len(request.records)} record(s)")
         conn = get_db_connection()
         if not conn:
+            logger.error("❌ Database unavailable for sleep data")
             return pb2.IngestResponse(
                 status="error",
                 message="Database unavailable",
@@ -162,6 +173,7 @@ class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
             processed += 1
 
         conn.commit()
+        logger.info(f"✅ Saved {processed} sleep record(s) to database")
 
         return pb2.IngestResponse(
             status="success",
@@ -171,8 +183,10 @@ class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
         )
 
     def ExportExercise(self, request, context):
+        logger.info(f"📥 Received exercise data: {len(request.records)} record(s)")
         conn = get_db_connection()
         if not conn:
+            logger.error("❌ Database unavailable for exercise data")
             return pb2.IngestResponse(status="error", message="DB down", processed=0)
 
         cursor = conn.cursor()
@@ -216,6 +230,7 @@ class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
             processed += 1
 
         conn.commit()
+        logger.info(f"✅ Saved {processed} exercise record(s) to database")
 
         return pb2.IngestResponse(
             status="success",
@@ -225,8 +240,10 @@ class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
         )
 
     def ExportGlucose(self, request, context):
+        logger.info(f"📥 Received glucose data: {len(request.records)} record(s)")
         conn = get_db_connection()
         if not conn:
+            logger.error("❌ Database unavailable for glucose data")
             return pb2.IngestResponse(status="error", message="DB down", processed=0)
 
         cursor = conn.cursor()
@@ -256,6 +273,7 @@ class HealthExportServicer(pb2_grpc.HealthExportServiceServicer):
             processed += 1
 
         conn.commit()
+        logger.info(f"✅ Saved {processed} glucose record(s) to database")
 
         return pb2.IngestResponse(
             status="success",
@@ -284,7 +302,8 @@ def serve():
     port = int(os.getenv("GRPC_PORT", 50051))
 
     server.add_insecure_port(f"{host}:{port}")
-    logger.info(f"gRPC server running on {host}:{port}")
+    logger.info(f"🚀 gRPC server running on {host}:{port}")
+    logger.info(f"📝 Logging to: {log_file}")
     server.start()
     server.wait_for_termination()
 
