@@ -1,3 +1,5 @@
+import os
+
 import grpc
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -8,7 +10,8 @@ import health_export_pb2_grpc as pb2_grpc
 app = FastAPI()
 
 # Connect to gRPC backend
-channel = grpc.insecure_channel("localhost:50051")
+GRPC_PORT = int(os.getenv("GRPC_PORT", 5001))
+channel = grpc.insecure_channel(f"localhost:{GRPC_PORT}")
 # Wait for channel to be ready (with timeout)
 try:
     grpc.channel_ready_future(channel).result(timeout=5)

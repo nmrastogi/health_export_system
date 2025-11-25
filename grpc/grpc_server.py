@@ -299,7 +299,7 @@ def serve():
     )
 
     host = os.getenv("GRPC_HOST", "0.0.0.0")
-    port = int(os.getenv("GRPC_PORT", 50051))
+    port = int(os.getenv("GRPC_PORT", 5001))
 
     server.add_insecure_port(f"{host}:{port}")
     logger.info(f"🚀 gRPC server running on {host}:{port}")
