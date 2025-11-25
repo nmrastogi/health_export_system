@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package health;
+
+import "google/protobuf/empty.proto";
+
+message IngestResponse {
+  string status = 1;
+  string message = 2;
+  int32 processed = 3;
+  string timestamp = 4;
+}
+
+message SleepRecord {
+  string date = 1;
+  string bedtime = 2;
+  string wake_time = 3;
+  int32 sleep_duration_minutes = 4;
+  int32 deep_sleep_minutes = 5;
+  int32 light_sleep_minutes = 6;
+  int32 rem_sleep_minutes = 7;
+  double sleep_efficiency = 8;
+  int32 heart_rate_avg = 9;
+  int32 heart_rate_min = 10;
+  int32 heart_rate_max = 11;
+}
+
+message SleepBatch {
+  repeated SleepRecord records = 1;
+}
+
+message ExerciseRecord {
+  string timestamp = 1;
+  string activity_type = 2;
+  int32 duration_minutes = 3;
+  double calories_burned = 4;
+  double distance_km = 5;
+  int32 steps = 6;
+  int32 heart_rate_avg = 7;
+  int32 heart_rate_max = 8;
+  double active_energy_kcal = 9;
+  double resting_energy_kcal = 10;
+}
+
+message ExerciseBatch {
+  repeated ExerciseRecord records = 1;
+}
+
+message GlucoseRecord {
+  string timestamp = 1;
+  double value = 2;
+  string unit = 3;
+  string source = 4;
+}
+
+message GlucoseBatch {
+  repeated GlucoseRecord records = 1;
+}
+
+service HealthExportService {
+  rpc ExportSleep(SleepBatch) returns (IngestResponse);
+  rpc ExportExercise(ExerciseBatch) returns (IngestResponse);
+  rpc ExportGlucose(GlucoseBatch) returns (IngestResponse);
+  rpc HealthCheck(google.protobuf.Empty) returns (IngestResponse);
+}

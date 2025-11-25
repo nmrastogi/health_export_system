@@ -1,0 +1,50 @@
+type IngestResult {
+  status: String!
+  message: String!
+  processed: Int!
+  timestamp: String!
+}
+
+input SleepRecordInput {
+  date: String!
+  bedtime: String
+  wake_time: String
+  sleep_duration_minutes: Int
+  deep_sleep_minutes: Int
+  light_sleep_minutes: Int
+  rem_sleep_minutes: Int
+  sleep_efficiency: Float
+  heart_rate_avg: Int
+  heart_rate_min: Int
+  heart_rate_max: Int
+}
+
+input ExerciseRecordInput {
+  timestamp: String!
+  activity_type: String
+  duration_minutes: Int
+  calories_burned: Float
+  distance_km: Float
+  steps: Int
+  heart_rate_avg: Int
+  heart_rate_max: Int
+  active_energy_kcal: Float
+  resting_energy_kcal: Float
+}
+
+input GlucoseRecordInput {
+  timestamp: String!
+  value: Float!
+  unit: String
+  source: String
+}
+
+type Mutation {
+  ingestSleep(records: [SleepRecordInput!]!): IngestResult!
+  ingestExercise(records: [ExerciseRecordInput!]!): IngestResult!
+  ingestGlucose(records: [GlucoseRecordInput!]!): IngestResult!
+}
+
+type Query {
+  healthCheck: String!
+}
